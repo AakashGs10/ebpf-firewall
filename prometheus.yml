@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 2s 
+
+scrape_configs:
+  - job_name: 'ebpf-firewall'
+    static_configs:
+      - targets: ['172.23.54.250:8080']
