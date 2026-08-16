@@ -1,4 +1,4 @@
-# 🛡️ eBPF XDP Firewall
+#  eBPF XDP Firewall
 
 A high-performance, kernel-level network firewall built with **eBPF/XDP** (eXpress Data Path) that provides real-time packet inspection, automated threat intelligence ingestion, and full observability through Prometheus and Grafana.
 
@@ -6,19 +6,19 @@ A high-performance, kernel-level network firewall built with **eBPF/XDP** (eXpre
 
 ---
 
-## ✨ Features
+##  Features
 
-- **⚡ XDP-Level Packet Processing** — Operates at the earliest point in the Linux networking stack for maximum throughput and minimum latency
-- **🔍 Deep Packet Inspection** — Parses Ethernet, IPv4, TCP, and UDP headers with full protocol awareness
-- **🧠 Live Threat Intelligence** — Automatically fetches and injects malicious IP blocklists from the [IPsum](https://github.com/stamparm/ipsum) threat feed
-- **🧩 IP Fragment Handling** — Tracks and blocks fragmented packets from known threats using an LRU hash map, preventing evasion via IP fragmentation
-- **📊 Prometheus Metrics** — Exports real-time telemetry including packet counts and active threat signatures
-- **📈 Grafana Dashboards** — Full observability stack with pre-configured Docker Compose setup
-- **🔄 Ring Buffer Telemetry** — Streams per-packet metadata (src/dst IP, ports, protocol, size) from kernel to userspace via eBPF ring buffer
+- ** XDP-Level Packet Processing** — Operates at the earliest point in the Linux networking stack for maximum throughput and minimum latency
+- ** Deep Packet Inspection** — Parses Ethernet, IPv4, TCP, and UDP headers with full protocol awareness
+- ** Live Threat Intelligence** — Automatically fetches and injects malicious IP blocklists from the [IPsum](https://github.com/stamparm/ipsum) threat feed
+- ** IP Fragment Handling** — Tracks and blocks fragmented packets from known threats using an LRU hash map, preventing evasion via IP fragmentation
+- ** Prometheus Metrics** — Exports real-time telemetry including packet counts and active threat signatures
+- **Grafana Dashboards** — Full observability stack with pre-configured Docker Compose setup
+- ** Ring Buffer Telemetry** — Streams per-packet metadata (src/dst IP, ports, protocol, size) from kernel to userspace via eBPF ring buffer
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -67,7 +67,7 @@ A high-performance, kernel-level network firewall built with **eBPF/XDP** (eXpre
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 ebpf-firewall/
@@ -89,7 +89,7 @@ ebpf-firewall/
 
 ---
 
-## 🔧 Prerequisites
+##  Prerequisites
 
 - **Linux** with kernel ≥ 5.15 (eBPF & XDP support required)
 - **Go** ≥ 1.25
@@ -114,7 +114,7 @@ sudo apt install -y docker.io docker-compose
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### 1. Clone the Repository
 
@@ -165,7 +165,7 @@ The control plane will:
 
 ---
 
-## 📊 Metrics & Observability
+##  Metrics & Observability
 
 ### Prometheus Metrics
 
@@ -181,7 +181,7 @@ The control plane will:
 
 ---
 
-## 🧠 How It Works
+##  How It Works
 
 ### Kernel Space (eBPF/XDP)
 
@@ -214,7 +214,7 @@ The Go application (`main.go`) handles:
 
 ---
 
-## 🛡️ Threat Intelligence
+##  Threat Intelligence
 
 The firewall automatically fetches live threat data from the [IPsum](https://github.com/stamparm/ipsum) project — a curated, daily-updated list of suspicious and malicious IP addresses sourced from 30+ threat intelligence feeds.
 
@@ -225,7 +225,7 @@ The firewall automatically fetches live threat data from the [IPsum](https://git
 
 ---
 
-## 🧰 Tech Stack
+##  Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
@@ -238,13 +238,8 @@ The firewall automatically fetches live threat data from the [IPsum](https://git
 
 ---
 
-## 📜 License
 
-This project is open source. See the repository for license details.
-
----
-
-## 🤝 Contributing
+##  Contributing
 
 Contributions are welcome! Feel free to open issues or submit pull requests.
 
@@ -256,12 +251,9 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 ---
 
-## 👤 Author
+##  Author
 
 **Aakash G S** — [@AakashGs10](https://github.com/AakashGs10)
 
 ---
 
-<p align="center">
-  <i>Built with eBPF — because security should happen at the speed of the kernel.</i>
-</p>
