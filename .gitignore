@@ -1,0 +1,5 @@
+shield
+uploads/
+kernel/*.o
+.env
+*.log

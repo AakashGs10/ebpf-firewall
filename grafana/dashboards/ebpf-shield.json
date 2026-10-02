@@ -1,0 +1,23 @@
+{
+  "uid": "ebpf-shield",
+  "title": "eBPF Shield - Cloud Node",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    { "id": 1, "type": "stat", "title": "Threat IPs in kernel", "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [ { "refId": "A", "expr": "ebpf_active_threat_signatures" } ] },
+    { "id": 2, "type": "stat", "title": "Packets dropped", "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [ { "refId": "A", "expr": "ebpf_packets_dropped_total" } ] },
+    { "id": 3, "type": "stat", "title": "Dropped by rate limiter", "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [ { "refId": "A", "expr": "ebpf_packets_ratelimited_total" } ] },
+    { "id": 4, "type": "stat", "title": "Packets allowed", "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [ { "refId": "A", "expr": "ebpf_packets_passed_total" } ] },
+    { "id": 5, "type": "stat", "title": "Files scanned", "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [ { "refId": "A", "expr": "ebpf_files_scanned_total" } ] },
+    { "id": 6, "type": "stat", "title": "Infected files blocked", "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [ { "refId": "A", "expr": "ebpf_files_blocked_total" } ] },
+    { "id": 7, "type": "timeseries", "title": "Packets per second (allowed vs dropped)", "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [
+      { "refId": "A", "expr": "rate(ebpf_packets_dropped_total[30s])", "legendFormat": "dropped/s" },
+      { "refId": "B", "expr": "rate(ebpf_packets_ratelimited_total[30s])", "legendFormat": "rate-limited/s" },
+      { "refId": "C", "expr": "rate(ebpf_packets_passed_total[30s])", "legendFormat": "allowed/s" } ] },
+    { "id": 8, "type": "timeseries", "title": "File scanning (per minute)", "gridPos": { "h": 7, "w": 24, "x": 0, "y": 13 }, "datasource": { "type": "prometheus", "uid": "prometheus-ds" }, "targets": [
+      { "refId": "A", "expr": "increase(ebpf_files_scanned_total[1m])", "legendFormat": "scanned" },
+      { "refId": "B", "expr": "increase(ebpf_files_blocked_total[1m])", "legendFormat": "blocked (infected)" } ] }
+  ]
+}

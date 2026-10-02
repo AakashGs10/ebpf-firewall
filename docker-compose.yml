@@ -1,14 +1,26 @@
 services:
   prometheus:
     image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
+    network_mode: host
+    restart: unless-stopped
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
 
   grafana:
     image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
+    network_mode: host
+    restart: unless-stopped
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD in .env}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  prom_data:
+  grafana_data:

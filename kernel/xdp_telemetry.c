@@ -14,15 +14,19 @@
 #define IP_OFFSET 0x1FFF
 #endif
 
-// 1. Memory Maps
-struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024);
-} ringbuf SEC(".maps");
+// Max packets per second allowed from ONE source IP before it is dropped.
+#define RATE_LIMIT_PPS 20000
+#define NS_PER_SEC 1000000000ULL
 
+// Indexes inside the per-CPU "counters" map
+#define CNT_DROPPED 0      // every dropped packet (all reasons)
+#define CNT_RATELIMITED 1  // subset: dropped by the rate limiter
+#define CNT_PASSED 2       // IPv4 packets allowed through
+
+// Known-bad source IPs (filled by the Go control plane)
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 10000);
+    __uint(max_entries, 20000);
     __type(key, __u32);
     __type(value, __u32);
 } blocklist SEC(".maps");
@@ -37,38 +41,37 @@ struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 5000);
     __type(key, struct frag_key);
-    __type(value, __u32); 
+    __type(value, __u32);
 } fragment_cache SEC(".maps");
 
-// --- NEW: HIGH-SPEED DROP METRICS MAP ---
-struct {
-    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u64);
-} drop_metrics SEC(".maps");
-// ----------------------------------------
-
-struct packet_event {
-    __u32 src_ip;
-    __u32 dst_ip;
-    __u16 src_port;
-    __u16 dst_port;
-    __u8 protocol;
-    __u8 _padding; 
-    __u16 packet_size;
+// Per-source-IP packet counter for the current 1-second window
+struct rate_state {
+    __u64 window_start;
+    __u32 count;
+    __u32 pad;
 };
 
-// Helper macro to increment drop count blazingly fast
-#define INCREMENT_DROP_METRIC() \
-    do { \
-        __u32 key = 0; \
-        __u64 *drop_count = bpf_map_lookup_elem(&drop_metrics, &key); \
-        if (drop_count) { \
-            *drop_count += 1; \
-        } \
-    } while(0)
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, __u32);
+    __type(value, struct rate_state);
+} rate_map SEC(".maps");
 
+// Lockless per-CPU counters read by the Go control plane
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 3);
+    __type(key, __u32);
+    __type(value, __u64);
+} counters SEC(".maps");
+
+static __always_inline void count_event(__u32 idx) {
+    __u64 *c = bpf_map_lookup_elem(&counters, &idx);
+    if (c) {
+        *c += 1;
+    }
+}
 
 SEC("xdp")
 int extract_network_telemetry(struct xdp_md *ctx) {
@@ -81,88 +84,78 @@ int extract_network_telemetry(struct xdp_md *ctx) {
 
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end) return XDP_PASS;
-    
-    // IP Blocklist check
+
     __u32 src_ip = ip->saddr;
-    __u32 *blocked = bpf_map_lookup_elem(&blocklist, &src_ip);
-    if (blocked) {
-        INCREMENT_DROP_METRIC();
+
+    // 1. Known-bad IP blocklist
+    if (bpf_map_lookup_elem(&blocklist, &src_ip)) {
+        count_event(CNT_DROPPED);
         return XDP_DROP;
     }
 
-    // FRAGMENTATION DETECTION
+    // 2. Per-IP rate limit (flood protection for unknown sources)
+    __u64 now = bpf_ktime_get_ns();
+    struct rate_state *rs = bpf_map_lookup_elem(&rate_map, &src_ip);
+    if (!rs) {
+        struct rate_state init = { .window_start = now, .count = 1 };
+        bpf_map_update_elem(&rate_map, &src_ip, &init, BPF_ANY);
+    } else if (now - rs->window_start > NS_PER_SEC) {
+        rs->window_start = now;
+        rs->count = 1;
+    } else {
+        rs->count++;
+        if (rs->count > RATE_LIMIT_PPS) {
+            count_event(CNT_DROPPED);
+            count_event(CNT_RATELIMITED);
+            return XDP_DROP;
+        }
+    }
+
+    // 3. Zero-trust: drop fragmented packets
     if (ip->frag_off & bpf_htons(IP_MF | IP_OFFSET)) {
         struct frag_key fkey = {};
         fkey.src_ip = ip->saddr;
         fkey.dst_ip = ip->daddr;
         fkey.ip_id = ip->id;
-
-        __u32 initial_threat_state = 1; 
-        bpf_map_update_elem(&fragment_cache, &fkey, &initial_threat_state, BPF_ANY);
-        
-        INCREMENT_DROP_METRIC();
+        __u32 threat = 1;
+        bpf_map_update_elem(&fragment_cache, &fkey, &threat, BPF_ANY);
+        count_event(CNT_DROPPED);
         return XDP_DROP;
     }
 
     int ip_hdr_len = ip->ihl * 4;
-    if (ip_hdr_len < sizeof(struct iphdr)) return XDP_PASS;
+    if (ip_hdr_len < sizeof(struct iphdr)) goto allow;
 
-    __u16 src_port = 0;
-    __u16 dst_port = 0;
-
-    // TCP DEEP PACKET INSPECTION
+    // 4. Demo payload signature "PWND" (first 4 payload bytes of one packet)
     if (ip->protocol == IPPROTO_TCP) {
         struct tcphdr *tcp = (void *)ip + ip_hdr_len;
-        if ((void *)(tcp + 1) > data_end) return XDP_PASS;
+        if ((void *)(tcp + 1) > data_end) goto allow;
 
         int tcp_hdr_len = tcp->doff * 4;
-        if (tcp_hdr_len < sizeof(struct tcphdr)) return XDP_PASS;
-
-        src_port = tcp->source;
-        dst_port = tcp->dest;
+        if (tcp_hdr_len < sizeof(struct tcphdr)) goto allow;
 
         unsigned char *payload = (unsigned char *)tcp + tcp_hdr_len;
-        if ((void *)(payload + 4) > data_end) goto emit_telemetry;
+        if ((void *)(payload + 4) > data_end) goto allow;
 
-        __u32 *payload_word = (__u32 *)payload;
-        if (*payload_word == 0x444E5750) {
-            INCREMENT_DROP_METRIC();
-            return XDP_DROP; 
-        }
-
-    // UDP DEEP PACKET INSPECTION
-    } else if (ip->protocol == IPPROTO_UDP) {
-        struct udphdr *udp = (void *)ip + ip_hdr_len;
-        if ((void *)(udp + 1) > data_end) return XDP_PASS;
-
-        src_port = udp->source;
-        dst_port = udp->dest;
-
-        unsigned char *payload = (unsigned char *)udp + sizeof(struct udphdr);
-        if ((void *)(payload + 4) > data_end) goto emit_telemetry;
-
-        __u32 *payload_word = (__u32 *)payload;
-        if (*payload_word == 0x444E5750) {
-            INCREMENT_DROP_METRIC();
+        if (*(__u32 *)payload == 0x444E5750) {
+            count_event(CNT_DROPPED);
             return XDP_DROP;
         }
-        
-    } else {
-        return XDP_PASS;
+    } else if (ip->protocol == IPPROTO_UDP) {
+        struct udphdr *udp = (void *)ip + ip_hdr_len;
+        if ((void *)(udp + 1) > data_end) goto allow;
+
+        unsigned char *payload = (unsigned char *)udp + sizeof(struct udphdr);
+        if ((void *)(payload + 4) > data_end) goto allow;
+
+        if (*(__u32 *)payload == 0x444E5750) {
+            count_event(CNT_DROPPED);
+            return XDP_DROP;
+        }
     }
 
-emit_telemetry: ; 
-    struct packet_event *event = bpf_ringbuf_reserve(&ringbuf, sizeof(struct packet_event), 0);
-    if (!event) return XDP_PASS;
-
-    event->src_ip = ip->saddr;
-    event->dst_ip = ip->daddr;
-    event->src_port = src_port;
-    event->dst_port = dst_port;
-    event->protocol = ip->protocol;
-    event->packet_size = data_end - data;
-
-    bpf_ringbuf_submit(event, 0);
+allow: ;
+    count_event(CNT_PASSED);
     return XDP_PASS;
 }
 

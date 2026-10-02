@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"log"
 	"net"
@@ -15,37 +14,38 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/ringbuf"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type PacketEvent struct {
-	SrcIP      uint32
-	DstIP      uint32
-	SrcPort    uint16
-	DstPort    uint16
-	Protocol   uint8
-	_          uint8
-	PacketSize uint16
-}
-
 var (
 	packetsPassedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ebpf_packets_passed_total",
-		Help: "Total number of packets passed through the eBPF kernel program",
+		Help: "IPv4 packets allowed through by the XDP program",
 	})
 	packetsDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ebpf_packets_dropped_total",
-		Help: "Total number of packets dropped by the eBPF kernel program",
+		Help: "Packets dropped by the XDP program (all reasons)",
+	})
+	packetsRateLimitedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ebpf_packets_ratelimited_total",
+		Help: "Packets dropped because a source IP exceeded the per-second rate limit",
 	})
 	activeThreatSignatures = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "ebpf_active_threat_signatures",
-		Help: "Number of malicious IPs currently injected into the kernel blocklist",
+		Help: "Malicious IPs loaded into the kernel blocklist from the threat feed",
 	})
 )
 
+func getenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// IPtoUint32 matches how the XDP program reads ip->saddr on a little-endian CPU.
 func IPtoUint32(ipStr string) uint32 {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
@@ -59,148 +59,139 @@ func IPtoUint32(ipStr string) uint32 {
 }
 
 func ingestThreatIntelligence(blocklist *ebpf.Map) {
-	feedURL := "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
+	const feedURL = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
+	const maxEntries = 15000 // map holds 20000; the rest is headroom for bans
+	client := &http.Client{Timeout: 30 * time.Second}
 
 	for {
 		log.Println("[INTELLIGENCE] Fetching live threat feed from IPsum...")
-		resp, err := http.Get(feedURL)
+		resp, err := client.Get(feedURL)
 		if err != nil {
-			log.Printf("Warning: Failed to reach threat feed: %v\n", err)
+			log.Printf("[INTELLIGENCE] feed unreachable: %v", err)
+			time.Sleep(60 * time.Second)
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			log.Printf("[INTELLIGENCE] feed returned HTTP %d", resp.StatusCode)
 			time.Sleep(60 * time.Second)
 			continue
 		}
 
-		scanner := bufio.NewScanner(resp.Body)
+		sc := bufio.NewScanner(resp.Body)
 		count := 0
-		maxEntries := 10000
-
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
+		for sc.Scan() && count < maxEntries {
+			line := strings.TrimSpace(sc.Text())
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
-
 			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				ipStr := parts[0]
-				ipUint := IPtoUint32(ipStr)
-				if ipUint != 0 {
-					val := uint32(1)
-					blocklist.Put(&ipUint, &val)
-					count++
-					if count >= maxEntries {
-						break
-					}
-				}
+			ip := IPtoUint32(parts[0])
+			if ip == 0 {
+				continue
 			}
+			val := uint32(1)
+			if err := blocklist.Put(&ip, &val); err != nil {
+				log.Printf("[INTELLIGENCE] map update failed: %v", err)
+				break
+			}
+			count++
 		}
 		resp.Body.Close()
 
-		log.Printf("[INTELLIGENCE] Successfully injected %d active threat signatures into the kernel.\n", count)
+		log.Printf("[INTELLIGENCE] Injected %d threat signatures into the kernel.", count)
 		activeThreatSignatures.Set(float64(count))
-
-		time.Sleep(60 * time.Second)
+		time.Sleep(6 * time.Hour)
 	}
 }
 
-// pollDropMetrics reads the PERCPU_ARRAY map and aggregates the drop counts
-func pollDropMetrics(dropMetricsMap *ebpf.Map) {
-	var key uint32 = 0
-	var lastTotal uint64 = 0
-
+// pollCounter sums one slot of the per-CPU counters map and feeds the delta to Prometheus.
+func pollCounter(m *ebpf.Map, key uint32, c prometheus.Counter) {
+	var last uint64
 	for {
-		var perCPUValues []uint64
-		err := dropMetricsMap.Lookup(&key, &perCPUValues)
-		if err == nil {
-			var currentTotal uint64 = 0
-			for _, val := range perCPUValues {
-				currentTotal += val
+		var perCPU []uint64
+		if err := m.Lookup(&key, &perCPU); err == nil {
+			var total uint64
+			for _, v := range perCPU {
+				total += v
 			}
-
-			if currentTotal > lastTotal {
-				delta := currentTotal - lastTotal
-				packetsDroppedTotal.Add(float64(delta))
-				lastTotal = currentTotal
+			if total > last {
+				c.Add(float64(total - last))
+				last = total
 			}
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Second)
 	}
 }
 
 func main() {
-	ifaceName := "lo"
+	ifaceName := getenv("IFACE", "eth0")
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
-		log.Fatalf("Fatal: Failed to find interface %s: %v\n", ifaceName, err)
+		log.Fatalf("Fatal: interface %s not found: %v", ifaceName, err)
 	}
 
 	spec, err := ebpf.LoadCollectionSpec("./kernel/xdp_telemetry.o")
 	if err != nil {
-		log.Fatalf("Fatal: Failed to load eBPF object file: %v\n", err)
+		log.Fatalf("Fatal: cannot load eBPF object: %v", err)
 	}
 
 	objs := struct {
-		ExtractNetworkTelemetry *ebpf.Program `ebpf:"extract_network_telemetry"`
-		Blocklist               *ebpf.Map     `ebpf:"blocklist"`
-		Ringbuf                 *ebpf.Map     `ebpf:"ringbuf"`
-		DropMetrics             *ebpf.Map     `ebpf:"drop_metrics"`
+		Prog      *ebpf.Program `ebpf:"extract_network_telemetry"`
+		Blocklist *ebpf.Map     `ebpf:"blocklist"`
+		Counters  *ebpf.Map     `ebpf:"counters"`
 	}{}
-
 	if err := spec.LoadAndAssign(&objs, nil); err != nil {
-		log.Fatalf("Fatal: Failed to load eBPF objects into kernel: %v\n", err)
+		log.Fatalf("Fatal: kernel rejected the eBPF program: %v", err)
 	}
-	defer objs.ExtractNetworkTelemetry.Close()
+	defer objs.Prog.Close()
 	defer objs.Blocklist.Close()
-	defer objs.Ringbuf.Close()
-	defer objs.DropMetrics.Close()
+	defer objs.Counters.Close()
 
-	l, err := link.AttachXDP(link.XDPOptions{
-		Program:   objs.ExtractNetworkTelemetry,
-		Interface: iface.Index,
-	})
+	// Generic (software) XDP works on every cloud NIC, including Azure hv_netvsc.
+	var flags link.XDPAttachFlags = link.XDPGenericMode
+	if getenv("XDP_MODE", "generic") == "native" {
+		flags = 0
+	}
+	l, err := link.AttachXDP(link.XDPOptions{Program: objs.Prog, Interface: iface.Index, Flags: flags})
 	if err != nil {
-		log.Fatalf("Fatal: Failed to attach XDP program to interface: %v\n", err)
+		log.Fatalf("Fatal: cannot attach XDP to %s: %v", ifaceName, err)
 	}
 	defer l.Close()
 	log.Printf("[SYSTEM] eBPF Firewall actively deployed on interface: %s\n", ifaceName)
 
-	go ingestThreatIntelligence(objs.Blocklist)
-	go pollDropMetrics(objs.DropMetrics)
-
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		log.Println("[TELEMETRY] Prometheus exporter listening on :8080/metrics")
-		if err := http.ListenAndServe(":8080", nil); err != nil {
-			log.Fatalf("Fatal: Prometheus HTTP server crashed: %v", err)
+	// Test hook, only active when the env var is set (used by the local gate test).
+	if tip := os.Getenv("TEST_BLOCK_IP"); tip != "" {
+		ip := IPtoUint32(tip)
+		val := uint32(1)
+		if ip != 0 {
+			if err := objs.Blocklist.Put(&ip, &val); err != nil {
+				log.Printf("[TEST] cannot blocklist %s: %v", tip, err)
+			} else {
+				log.Printf("[TEST] blocklisted %s", tip)
+			}
 		}
-	}()
-
-	rd, err := ringbuf.NewReader(objs.Ringbuf)
-	if err != nil {
-		log.Fatalf("Fatal: Failed to open ring buffer: %v", err)
 	}
-	defer rd.Close()
 
+	go ingestThreatIntelligence(objs.Blocklist)
+	go pollCounter(objs.Counters, 0, packetsDroppedTotal)
+	go pollCounter(objs.Counters, 1, packetsRateLimitedTotal)
+	go pollCounter(objs.Counters, 2, packetsPassedTotal)
+	go startUploadGateway(objs.Blocklist)
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	go func() {
-		var event PacketEvent
-		for {
-			record, err := rd.Read()
-			if err != nil {
-				if err == ringbuf.ErrClosed {
-					return
-				}
-				continue
-			}
-
-			if err := binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &event); err != nil {
-				continue
-			}
-			packetsPassedTotal.Inc()
+		addr := getenv("METRICS_ADDR", ":8080")
+		log.Printf("[TELEMETRY] Prometheus exporter listening on %s/metrics", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Fatalf("Fatal: metrics server crashed: %v", err)
 		}
 	}()
 
 	stopper := make(chan os.Signal, 1)
 	signal.Notify(stopper, os.Interrupt, syscall.SIGTERM)
 	<-stopper
-	log.Println("[SYSTEM] Received shutdown signal. Detaching eBPF program and halting...")
+	log.Println("[SYSTEM] Shutdown signal received. Detaching eBPF program.")
 }
