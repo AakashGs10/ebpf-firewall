@@ -7,7 +7,6 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-// Explicit macro definitions to avoid missing header identifiers in eBPF target
 #ifndef IP_MF
 #define IP_MF 0x2000
 #endif
@@ -28,44 +27,58 @@ struct {
     __type(value, __u32);
 } blocklist SEC(".maps");
 
-// Fragment Tracking Structure
 struct frag_key {
     __u32 src_ip;
     __u32 dst_ip;
     __u16 ip_id;
 };
 
-// LRU Map to track active fragmented flows (prevents memory exhaustion)
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 5000);
     __type(key, struct frag_key);
-    __type(value, __u32); // Tracks threat status
+    __type(value, __u32); 
 } fragment_cache SEC(".maps");
 
-// 2. Telemetry Structure
+// --- NEW: HIGH-SPEED DROP METRICS MAP ---
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} drop_metrics SEC(".maps");
+// ----------------------------------------
+
 struct packet_event {
     __u32 src_ip;
     __u32 dst_ip;
     __u16 src_port;
     __u16 dst_port;
     __u8 protocol;
-    __u8 _padding; // Memory alignment
+    __u8 _padding; 
     __u16 packet_size;
 };
 
-// 3. The eBPF Hook
+// Helper macro to increment drop count blazingly fast
+#define INCREMENT_DROP_METRIC() \
+    do { \
+        __u32 key = 0; \
+        __u64 *drop_count = bpf_map_lookup_elem(&drop_metrics, &key); \
+        if (drop_count) { \
+            *drop_count += 1; \
+        } \
+    } while(0)
+
+
 SEC("xdp")
 int extract_network_telemetry(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
 
-    // --- L2: ETHERNET ---
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end) return XDP_PASS;
     if (eth->h_proto != bpf_htons(ETH_P_IP)) return XDP_PASS;
 
-    // --- L3: IP ---
     struct iphdr *ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end) return XDP_PASS;
     
@@ -73,12 +86,11 @@ int extract_network_telemetry(struct xdp_md *ctx) {
     __u32 src_ip = ip->saddr;
     __u32 *blocked = bpf_map_lookup_elem(&blocklist, &src_ip);
     if (blocked) {
+        INCREMENT_DROP_METRIC();
         return XDP_DROP;
     }
 
-    // ----------------------------------------------------
-    // FRAGMENTATION DETECTION (ZERO-TRUST POLICY)
-    // ----------------------------------------------------
+    // FRAGMENTATION DETECTION
     if (ip->frag_off & bpf_htons(IP_MF | IP_OFFSET)) {
         struct frag_key fkey = {};
         fkey.src_ip = ip->saddr;
@@ -88,17 +100,17 @@ int extract_network_telemetry(struct xdp_md *ctx) {
         __u32 initial_threat_state = 1; 
         bpf_map_update_elem(&fragment_cache, &fkey, &initial_threat_state, BPF_ANY);
         
+        INCREMENT_DROP_METRIC();
         return XDP_DROP;
     }
 
     int ip_hdr_len = ip->ihl * 4;
     if (ip_hdr_len < sizeof(struct iphdr)) return XDP_PASS;
 
-    // Variables for telemetry
     __u16 src_port = 0;
     __u16 dst_port = 0;
 
-    // --- L4/L7: TCP DEEP PACKET INSPECTION ---
+    // TCP DEEP PACKET INSPECTION
     if (ip->protocol == IPPROTO_TCP) {
         struct tcphdr *tcp = (void *)ip + ip_hdr_len;
         if ((void *)(tcp + 1) > data_end) return XDP_PASS;
@@ -113,9 +125,12 @@ int extract_network_telemetry(struct xdp_md *ctx) {
         if ((void *)(payload + 4) > data_end) goto emit_telemetry;
 
         __u32 *payload_word = (__u32 *)payload;
-        if (*payload_word == 0x444E5750) return XDP_DROP; // "PWND"
+        if (*payload_word == 0x444E5750) {
+            INCREMENT_DROP_METRIC();
+            return XDP_DROP; 
+        }
 
-    // --- L4/L7: UDP DEEP PACKET INSPECTION ---
+    // UDP DEEP PACKET INSPECTION
     } else if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = (void *)ip + ip_hdr_len;
         if ((void *)(udp + 1) > data_end) return XDP_PASS;
@@ -127,15 +142,16 @@ int extract_network_telemetry(struct xdp_md *ctx) {
         if ((void *)(payload + 4) > data_end) goto emit_telemetry;
 
         __u32 *payload_word = (__u32 *)payload;
-        if (*payload_word == 0x444E5750) return XDP_DROP; // "PWND"
+        if (*payload_word == 0x444E5750) {
+            INCREMENT_DROP_METRIC();
+            return XDP_DROP;
+        }
         
     } else {
-        // Not TCP or UDP. Let it pass.
         return XDP_PASS;
     }
 
 emit_telemetry: ; 
-    // --- L7: TELEMETRY EXPORT ---
     struct packet_event *event = bpf_ringbuf_reserve(&ringbuf, sizeof(struct packet_event), 0);
     if (!event) return XDP_PASS;
 
