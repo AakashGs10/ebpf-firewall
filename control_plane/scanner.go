@@ -182,18 +182,6 @@ func startUploadGateway(blocklist *ebpf.Map) {
 	if os.Getenv("UPLOAD_TOKEN") == "" {
 		log.Println("[SCANNER] WARNING: UPLOAD_TOKEN not set, uploads are unauthenticated")
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/upload", uploadHandler(blocklist))
-	srv := &http.Server{
-		Addr:              ":8000",
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      2 * time.Minute,
-		IdleTimeout:       30 * time.Second,
-	}
-	log.Println("[SCANNER] Upload gateway listening on :8000/upload")
-	if err := srv.ListenAndServe(); err != nil {
-		log.Printf("[SCANNER] gateway stopped: %v", err)
-	}
+	http.HandleFunc("/upload", uploadHandler(blocklist))
+	log.Println("[SCANNER] Upload gateway registered on :8080/upload")
 }
