@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>eBPF Cloud Firewall — Project Showcase</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ===== RESET & BASE ===== */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg-primary: #0a0e1a;
+      --bg-card: rgba(15, 23, 42, 0.7);
+      --bg-card-hover: rgba(20, 30, 55, 0.85);
+      --border: rgba(99, 102, 241, 0.15);
+      --border-hover: rgba(99, 102, 241, 0.4);
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #818cf8;
+      --accent-bright: #a5b4fc;
+      --azure-blue: #0078d4;
+      --azure-glow: #38bdf8;
+      --green: #34d399;
+      --green-dim: rgba(52, 211, 153, 0.15);
+      --red: #f87171;
+      --red-dim: rgba(248, 113, 113, 0.15);
+      --orange: #fb923c;
+      --orange-dim: rgba(251, 146, 60, 0.12);
+      --purple: #c084fc;
+      --purple-dim: rgba(192, 132, 252, 0.12);
+      --gradient-hero: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+      --gradient-azure: linear-gradient(135deg, #0078d4, #38bdf8);
+      --gradient-green: linear-gradient(135deg, #059669, #34d399);
+      --gradient-purple: linear-gradient(135deg, #7c3aed, #c084fc);
+      --gradient-red: linear-gradient(135deg, #dc2626, #f87171);
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+      --radius: 16px;
+      --radius-sm: 10px;
+      --shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+      --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.08);
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+    ::selection { background: rgba(129, 140, 248, 0.3); }
+
+    /* ===== ANIMATED BACKGROUND ===== */
+    .bg-grid {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background-image:
+        linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+    .bg-glow {
+      position: fixed; z-index: 0; pointer-events: none;
+      width: 600px; height: 600px; border-radius: 50%;
+      filter: blur(120px); opacity: 0.15;
+    }
+    .bg-glow-1 { top: -200px; left: -100px; background: #6366f1; }
+    .bg-glow-2 { bottom: -200px; right: -100px; background: #0078d4; }
+
+    /* ===== NAV ===== */
+    nav {
+      position: fixed; top: 0; width: 100%; z-index: 100;
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      background: rgba(10, 14, 26, 0.8);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+    }
+    .nav-inner {
+      max-width: 1200px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 64px;
+    }
+    .nav-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 1.05rem; color: var(--text-primary);
+      text-decoration: none;
+    }
+    .nav-brand .shield { font-size: 1.4rem; }
+    .nav-links { display: flex; gap: 6px; list-style: none; }
+    .nav-links a {
+      color: var(--text-secondary); text-decoration: none;
+      font-size: 0.85rem; font-weight: 500;
+      padding: 6px 14px; border-radius: 8px;
+      transition: all 0.2s;
+    }
+    .nav-links a:hover { color: var(--text-primary); background: rgba(99, 102, 241, 0.1); }
+
+    /* ===== SECTIONS ===== */
+    section { position: relative; z-index: 1; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+
+    /* ===== HERO ===== */
+    .hero {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      text-align: center; background: var(--gradient-hero);
+      padding: 120px 2rem 80px;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(0, 120, 212, 0.12); border: 1px solid rgba(0, 120, 212, 0.3);
+      padding: 6px 18px; border-radius: 100px;
+      font-size: 0.8rem; font-weight: 600; color: var(--azure-glow);
+      margin-bottom: 28px;
+      animation: pulse-border 3s ease-in-out infinite;
+    }
+    @keyframes pulse-border {
+      0%, 100% { border-color: rgba(0, 120, 212, 0.3); }
+      50% { border-color: rgba(56, 189, 248, 0.6); }
+    }
+    .hero h1 {
+      font-size: clamp(2.4rem, 5.5vw, 4.2rem);
+      font-weight: 900; line-height: 1.15;
+      letter-spacing: -0.03em;
+      margin-bottom: 20px;
+    }
+    .hero h1 .gradient-text {
+      background: var(--gradient-azure);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero-sub {
+      font-size: 1.15rem; color: var(--text-secondary);
+      max-width: 680px; margin: 0 auto 40px;
+      line-height: 1.8;
+    }
+    .hero-meta {
+      display: flex; gap: 32px; justify-content: center; flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .hero-meta-item {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+    }
+    .hero-meta-item .value {
+      font-size: 1.6rem; font-weight: 800; font-family: var(--font-mono);
+    }
+    .hero-meta-item .label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .azure-val { color: var(--azure-glow); }
+    .green-val { color: var(--green); }
+    .purple-val { color: var(--purple); }
+
+    /* ===== SECTION HEADERS ===== */
+    .section-header {
+      text-align: center; margin-bottom: 56px;
+      padding-top: 100px;
+    }
+    .section-tag {
+      display: inline-block;
+      font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.12em; padding: 5px 14px;
+      border-radius: 6px; margin-bottom: 16px;
+    }
+    .tag-azure { background: rgba(0, 120, 212, 0.12); color: var(--azure-glow); }
+    .tag-green { background: var(--green-dim); color: var(--green); }
+    .tag-purple { background: var(--purple-dim); color: var(--purple); }
+    .tag-red { background: var(--red-dim); color: var(--red); }
+    .tag-orange { background: var(--orange-dim); color: var(--orange); }
+    .section-header h2 {
+      font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 12px;
+    }
+    .section-header p { color: var(--text-secondary); max-width: 600px; margin: 0 auto; font-size: 1rem; }
+
+    /* ===== CARDS ===== */
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: var(--shadow);
+    }
+    .card:hover {
+      border-color: var(--border-hover);
+      background: var(--bg-card-hover);
+      transform: translateY(-4px);
+      box-shadow: var(--shadow), var(--shadow-glow);
+    }
+
+    /* ===== ARCHITECTURE SECTION ===== */
+    .arch-section { padding-bottom: 80px; }
+    .arch-diagram {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .arch-layer {
+      position: relative;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 32px;
+      margin-bottom: -1px;
+      transition: all 0.3s;
+    }
+    .arch-layer:hover { border-color: var(--border-hover); z-index: 2; }
+    .arch-layer-tag {
+      position: absolute; top: -11px; left: 24px;
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; padding: 3px 10px;
+      border-radius: 4px;
+    }
+    .layer-cloud { background: var(--bg-card); border-color: rgba(0, 120, 212, 0.3); }
+    .layer-cloud .arch-layer-tag { background: rgba(0, 120, 212, 0.2); color: var(--azure-glow); }
+    .layer-kernel { background: rgba(15, 23, 42, 0.9); border-color: rgba(248, 113, 113, 0.25); }
+    .layer-kernel .arch-layer-tag { background: var(--red-dim); color: var(--red); }
+    .layer-user { background: var(--bg-card); border-color: rgba(52, 211, 153, 0.25); }
+    .layer-user .arch-layer-tag { background: var(--green-dim); color: var(--green); }
+    .layer-obs { background: var(--bg-card); border-color: rgba(192, 132, 252, 0.25); }
+    .layer-obs .arch-layer-tag { background: var(--purple-dim); color: var(--purple); }
+
+    .arch-layer h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 8px; }
+    .arch-layer p { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 14px; }
+    .arch-components {
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .arch-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 0.78rem; font-weight: 500;
+      padding: 5px 12px; border-radius: 6px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .arch-arrow {
+      display: flex; justify-content: center; align-items: center;
+      height: 40px; color: var(--text-muted); font-size: 1.3rem;
+      animation: bob 2s ease-in-out infinite;
+    }
+    @keyframes bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(5px); }
+    }
+
+    /* ===== PIPELINE ===== */
+    .pipeline-section { padding: 0 0 80px; }
+    .pipeline {
+      display: flex; align-items: stretch; gap: 0;
+      overflow-x: auto; padding: 20px 0;
+      max-width: 100%;
+    }
+    .pipeline-step {
+      flex: 1; min-width: 180px;
+      position: relative;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 24px 20px;
+      text-align: center;
+      transition: all 0.3s;
+    }
+    .pipeline-step:hover { border-color: var(--border-hover); transform: translateY(-3px); }
+    .pipeline-step .step-num {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 800; font-family: var(--font-mono);
+      margin: 0 auto 12px;
+    }
+    .pipeline-step h4 { font-size: 0.88rem; font-weight: 700; margin-bottom: 6px; }
+    .pipeline-step p { font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55; }
+    .pipeline-connector {
+      display: flex; align-items: center; justify-content: center;
+      width: 40px; flex-shrink: 0;
+      color: var(--text-muted); font-size: 1.1rem;
+    }
+    .step-azure .step-num { background: rgba(0, 120, 212, 0.2); color: var(--azure-glow); }
+    .step-green .step-num { background: var(--green-dim); color: var(--green); }
+    .step-purple .step-num { background: var(--purple-dim); color: var(--purple); }
+    .step-red .step-num { background: var(--red-dim); color: var(--red); }
+
+    /* ===== CLOUD SERVICES ===== */
+    .services-section { padding: 0 0 80px; }
+    .services-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 20px;
+    }
+    .service-card { padding: 28px; }
+    .service-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem; margin-bottom: 18px;
+    }
+    .service-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 8px; }
+    .service-card p { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 14px; }
+    .service-detail {
+      font-size: 0.78rem; color: var(--text-muted); font-family: var(--font-mono);
+      background: rgba(0,0,0,0.25); padding: 10px 14px; border-radius: 8px;
+      line-height: 1.8;
+    }
+    .service-detail .hl-azure { color: var(--azure-glow); }
+    .service-detail .hl-green { color: var(--green); }
+    .service-detail .hl-purple { color: var(--purple); }
+    .service-detail .hl-red { color: var(--red); }
+
+    /* ===== METRICS DASHBOARD MOCKUP ===== */
+    .metrics-section { padding: 0 0 80px; }
+    .metrics-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+      margin-bottom: 24px;
+    }
+    .metric-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 20px 18px;
+      text-align: center;
+    }
+    .metric-card .metric-label {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-muted); margin-bottom: 8px; font-weight: 600;
+    }
+    .metric-card .metric-value {
+      font-size: 1.8rem; font-weight: 800; font-family: var(--font-mono);
+    }
+    .metric-card .metric-sub {
+      font-size: 0.72rem; color: var(--text-muted); margin-top: 4px;
+    }
+    .dashboard-mock {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px; min-height: 260px;
+      position: relative; overflow: hidden;
+    }
+    .dashboard-mock-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    .dashboard-mock-header h4 { font-size: 0.9rem; font-weight: 600; }
+    .dashboard-mock-header .grafana-badge {
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; padding: 3px 10px; border-radius: 4px;
+      background: rgba(251, 146, 60, 0.12); color: var(--orange);
+    }
+    .chart-area { position: relative; height: 180px; display: flex; align-items: flex-end; gap: 3px; padding: 0 4px; }
+    .chart-bar {
+      flex: 1; border-radius: 3px 3px 0 0;
+      min-height: 4px; transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .chart-bar.passed { background: var(--gradient-green); opacity: 0.7; }
+    .chart-bar.dropped { background: var(--gradient-red); opacity: 0.8; }
+    .chart-legend {
+      display: flex; gap: 20px; margin-top: 14px; justify-content: center;
+    }
+    .chart-legend span {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.75rem; color: var(--text-secondary);
+    }
+    .chart-legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-green { background: var(--green); }
+    .dot-red { background: var(--red); }
+
+    /* ===== SECURITY FEATURES ===== */
+    .security-section { padding: 0 0 80px; }
+    .security-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .sec-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 24px;
+      transition: all 0.3s;
+    }
+    .sec-card:hover { border-color: var(--border-hover); transform: translateY(-3px); }
+    .sec-card .sec-icon { font-size: 1.6rem; margin-bottom: 12px; }
+    .sec-card h4 { font-size: 0.95rem; font-weight: 700; margin-bottom: 6px; }
+    .sec-card p { font-size: 0.82rem; color: var(--text-secondary); }
+
+    /* ===== TECH STACK ===== */
+    .stack-section { padding: 0 0 80px; }
+    .stack-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .stack-item {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 20px 16px;
+      text-align: center; transition: all 0.3s;
+    }
+    .stack-item:hover { border-color: var(--border-hover); transform: translateY(-2px); }
+    .stack-item .stack-icon { font-size: 1.8rem; margin-bottom: 8px; }
+    .stack-item .stack-name { font-size: 0.82rem; font-weight: 700; margin-bottom: 2px; }
+    .stack-item .stack-role { font-size: 0.72rem; color: var(--text-muted); }
+
+    /* ===== TERMINAL ===== */
+    .terminal-section { padding: 0 0 100px; }
+    .terminal {
+      background: #0c0c14;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .terminal-bar {
+      background: rgba(255,255,255,0.04);
+      padding: 10px 16px; display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .terminal-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .terminal-dot.r { background: #f87171; }
+    .terminal-dot.y { background: #fbbf24; }
+    .terminal-dot.g { background: #34d399; }
+    .terminal-title {
+      margin-left: 12px; font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);
+    }
+    .terminal-body {
+      padding: 20px 24px; font-family: var(--font-mono); font-size: 0.8rem;
+      line-height: 1.9; color: var(--text-secondary); max-height: 420px; overflow-y: auto;
+    }
+    .terminal-body .cmd { color: var(--green); }
+    .terminal-body .info { color: var(--azure-glow); }
+    .terminal-body .success { color: var(--green); font-weight: 600; }
+    .terminal-body .warn { color: var(--orange); }
+    .terminal-body .dim { color: var(--text-muted); }
+
+    /* ===== FOOTER ===== */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 2rem; text-align: center;
+    }
+    footer p { font-size: 0.82rem; color: var(--text-muted); }
+    footer .footer-name { color: var(--accent-bright); font-weight: 600; }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 768px) {
+      .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+      .pipeline { flex-direction: column; }
+      .pipeline-connector { height: 30px; width: 100%; }
+      .nav-links { display: none; }
+    }
+    @media (max-width: 480px) {
+      .hero h1 { font-size: 1.8rem; }
+      .metrics-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    /* ===== SCROLL ANIMATIONS ===== */
+    .fade-in {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity 0.7s ease, transform 0.7s ease;
+    }
+    .fade-in.visible { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow bg-glow-1"></div>
+<div class="bg-glow bg-glow-2"></div>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-inner">
+    <a href="#" class="nav-brand">
+      <span class="shield">🛡️</span> eBPF Cloud Firewall
+    </a>
+    <ul class="nav-links">
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#pipeline">Deployment</a></li>
+      <li><a href="#services">Cloud Services</a></li>
+      <li><a href="#metrics">Monitoring</a></li>
+      <li><a href="#security">Security</a></li>
+      <li><a href="#stack">Tech Stack</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div>
+    <div class="hero-badge">
+      ☁️ Deployed on Microsoft Azure
+    </div>
+    <h1>
+      Kernel-Level Cloud Security<br />
+      with <span class="gradient-text">eBPF &amp; Azure</span>
+    </h1>
+    <p class="hero-sub">
+      A high-performance, cloud-deployed network firewall that operates at the <strong>Linux kernel level</strong>
+      using eBPF/XDP — dropping malicious packets before they ever reach the networking stack.
+      Fully automated deployment on <strong>Azure</strong> with real-time observability.
+    </p>
+    <div class="hero-meta">
+      <div class="hero-meta-item">
+        <span class="value azure-val" id="counter-threats">10,000+</span>
+        <span class="label">Threat IPs Blocked</span>
+      </div>
+      <div class="hero-meta-item">
+        <span class="value green-val">&lt; 100ns</span>
+        <span class="label">Per-Packet Latency</span>
+      </div>
+      <div class="hero-meta-item">
+        <span class="value purple-val">24/7</span>
+        <span class="label">Cloud Uptime</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section id="architecture" class="arch-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-azure">Cloud Architecture</span>
+      <h2>End-to-End Cloud Deployment</h2>
+      <p>Every layer — from the kernel XDP hook to the Grafana dashboard — runs on an Azure VM, provisioned and configured via automated scripts.</p>
+    </div>
+
+    <div class="arch-diagram fade-in">
+      <!-- Cloud Layer -->
+      <div class="arch-layer layer-cloud">
+        <span class="arch-layer-tag">☁️ Azure Cloud (IaaS)</span>
+        <h3>Azure Virtual Machine — Standard_B1s</h3>
+        <p>Ubuntu 22.04 LTS provisioned in East Asia region with NSG firewall rules for ports 22, 3000, 8080, 9090</p>
+        <div class="arch-components">
+          <span class="arch-chip">🌐 Public IP</span>
+          <span class="arch-chip">🔐 NSG Rules</span>
+          <span class="arch-chip">💾 Managed Disk</span>
+          <span class="arch-chip">🖥️ Ubuntu 22.04</span>
+          <span class="arch-chip">🔑 SSH Keys</span>
+        </div>
+      </div>
+
+      <div class="arch-arrow">▼</div>
+
+      <!-- Kernel Layer -->
+      <div class="arch-layer layer-kernel">
+        <span class="arch-layer-tag">🔴 Kernel Space (eBPF/XDP)</span>
+        <h3>XDP Program — Attached to eth0 (NIC Driver Level)</h3>
+        <p>Processes every packet at the earliest point in the Linux networking stack — before the kernel even allocates an sk_buff</p>
+        <div class="arch-components">
+          <span class="arch-chip">🚫 IP Blocklist (Hash Map)</span>
+          <span class="arch-chip">⚡ Rate Limiter (LRU Map)</span>
+          <span class="arch-chip">🧩 Fragment Cache</span>
+          <span class="arch-chip">🔍 DPI Signatures</span>
+          <span class="arch-chip">📊 Per-CPU Counters</span>
+        </div>
+      </div>
+
+      <div class="arch-arrow">▼</div>
+
+      <!-- Userspace Layer -->
+      <div class="arch-layer layer-user">
+        <span class="arch-layer-tag">🟢 User Space (Go Control Plane)</span>
+        <h3>Control Plane — Go Application (systemd Service)</h3>
+        <p>Manages eBPF lifecycle, ingests live threat intelligence from IPsum, runs the ClamAV antivirus upload gateway</p>
+        <div class="arch-components">
+          <span class="arch-chip">🧠 Threat Intel Ingestion</span>
+          <span class="arch-chip">🦠 ClamAV Gateway (:8000)</span>
+          <span class="arch-chip">📡 Prometheus Exporter (:8080)</span>
+          <span class="arch-chip">💚 Health Check (/healthz)</span>
+        </div>
+      </div>
+
+      <div class="arch-arrow">▼</div>
+
+      <!-- Observability Layer -->
+      <div class="arch-layer layer-obs">
+        <span class="arch-layer-tag">🟣 Observability Stack (Docker)</span>
+        <h3>Prometheus + Grafana — Docker Compose</h3>
+        <p>Scrapes metrics from the Go control plane every 5 seconds, auto-provisioned Grafana dashboard with persistent storage</p>
+        <div class="arch-components">
+          <span class="arch-chip">📈 Prometheus (:9090)</span>
+          <span class="arch-chip">📊 Grafana (:3000)</span>
+          <span class="arch-chip">🗄️ Persistent Volumes</span>
+          <span class="arch-chip">📋 Auto-Provisioned Dashboards</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DEPLOYMENT PIPELINE -->
+<section id="pipeline" class="pipeline-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-green">Automated Deployment</span>
+      <h2>Cloud Deployment Pipeline</h2>
+      <p>One script provisions the Azure VM, installs all dependencies, compiles the eBPF program natively, and starts the full stack as a systemd service.</p>
+    </div>
+
+    <div class="pipeline fade-in">
+      <div class="pipeline-step step-azure">
+        <div class="step-num">1</div>
+        <h4>Azure Login</h4>
+        <p>Authenticate via <code>az login</code> with device code flow</p>
+      </div>
+      <div class="pipeline-connector">→</div>
+      <div class="pipeline-step step-azure">
+        <div class="step-num">2</div>
+        <h4>Provision VM</h4>
+        <p>Create Resource Group + Ubuntu 22.04 VM (Standard_B1s)</p>
+      </div>
+      <div class="pipeline-connector">→</div>
+      <div class="pipeline-step step-azure">
+        <div class="step-num">3</div>
+        <h4>Open Ports</h4>
+        <p>Configure NSG rules for 8080, 3000, 9090, 8000</p>
+      </div>
+      <div class="pipeline-connector">→</div>
+      <div class="pipeline-step step-green">
+        <div class="step-num">4</div>
+        <h4>Bootstrap</h4>
+        <p>Install Clang, LLVM, Go, Docker, ClamAV, libbpf on VM</p>
+      </div>
+      <div class="pipeline-connector">→</div>
+      <div class="pipeline-step step-green">
+        <div class="step-num">5</div>
+        <h4>Build</h4>
+        <p>Compile eBPF C → BPF bytecode, build Go binary natively</p>
+      </div>
+      <div class="pipeline-connector">→</div>
+      <div class="pipeline-step step-purple">
+        <div class="step-num">6</div>
+        <h4>Deploy</h4>
+        <p>Create systemd service + launch Prometheus & Grafana containers</p>
+      </div>
+      <div class="pipeline-connector">→</div>
+      <div class="pipeline-step step-red">
+        <div class="step-num">7</div>
+        <h4>Shield Active</h4>
+        <p>XDP attached to NIC — firewall is live, metrics flowing</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CLOUD SERVICES USED -->
+<section id="services" class="services-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-azure">Cloud Services</span>
+      <h2>Azure Services &amp; Cloud Infrastructure</h2>
+      <p>How we leveraged Microsoft Azure and cloud-native tooling to deploy a production-grade security system.</p>
+    </div>
+
+    <div class="services-grid fade-in">
+      <!-- Azure VM -->
+      <div class="card service-card">
+        <div class="service-icon" style="background: rgba(0,120,212,0.15);">🖥️</div>
+        <h3>Azure Virtual Machine</h3>
+        <p>The entire firewall runs on an Azure-provisioned Ubuntu 22.04 VM with SSH key-based authentication and auto-generated secrets.</p>
+        <div class="service-detail">
+          <span class="hl-azure">Size:</span> Standard_B1s (Free Tier)<br/>
+          <span class="hl-azure">Image:</span> Ubuntu 22.04 LTS<br/>
+          <span class="hl-azure">Region:</span> East Asia<br/>
+          <span class="hl-azure">Auth:</span> SSH Key Pair
+        </div>
+      </div>
+
+      <!-- NSG -->
+      <div class="card service-card">
+        <div class="service-icon" style="background: rgba(0,120,212,0.15);">🔐</div>
+        <h3>Network Security Groups</h3>
+        <p>Azure NSG rules control external access — only exposing the metrics, dashboards, and upload endpoints to authorized IPs.</p>
+        <div class="service-detail">
+          <span class="hl-green">Port 22</span> → SSH Access<br/>
+          <span class="hl-green">Port 3000</span> → Grafana Dashboard<br/>
+          <span class="hl-green">Port 8080</span> → Prometheus Metrics<br/>
+          <span class="hl-green">Port 8000</span> → ClamAV Upload
+        </div>
+      </div>
+
+      <!-- Docker on Cloud -->
+      <div class="card service-card">
+        <div class="service-icon" style="background: var(--purple-dim);">🐳</div>
+        <h3>Containerized Monitoring</h3>
+        <p>Prometheus and Grafana run as Docker containers on the cloud VM, managed by Docker Compose with persistent volumes and auto-restart.</p>
+        <div class="service-detail">
+          <span class="hl-purple">Prometheus</span> → time-series DB<br/>
+          <span class="hl-purple">Grafana</span> → visualization UI<br/>
+          <span class="hl-purple">Volumes</span> → data persistence<br/>
+          <span class="hl-purple">Restart</span> → unless-stopped
+        </div>
+      </div>
+
+      <!-- Systemd -->
+      <div class="card service-card">
+        <div class="service-icon" style="background: var(--green-dim);">⚙️</div>
+        <h3>systemd Service Management</h3>
+        <p>The eBPF firewall runs as a production systemd service with auto-restart on failure, environment file for secrets, and proper lifecycle management.</p>
+        <div class="service-detail">
+          <span class="hl-green">Service:</span> ebpf-shield.service<br/>
+          <span class="hl-green">Restart:</span> on-failure<br/>
+          <span class="hl-green">Secrets:</span> /etc/ebpf-shield.env<br/>
+          <span class="hl-green">Lifecycle:</span> ExecStartPre/StopPost
+        </div>
+      </div>
+
+      <!-- Threat Intel -->
+      <div class="card service-card">
+        <div class="service-icon" style="background: var(--red-dim);">🌐</div>
+        <h3>Cloud Threat Intelligence</h3>
+        <p>The control plane periodically fetches live threat feeds from the internet (IPsum — 30+ sources) and injects malicious IPs directly into the kernel blocklist map.</p>
+        <div class="service-detail">
+          <span class="hl-red">Feed:</span> IPsum (stamparm/GitHub)<br/>
+          <span class="hl-red">Interval:</span> Every 6 hours<br/>
+          <span class="hl-red">Max IPs:</span> 15,000 signatures<br/>
+          <span class="hl-red">Injection:</span> Direct to kernel map
+        </div>
+      </div>
+
+      <!-- ClamAV -->
+      <div class="card service-card">
+        <div class="service-icon" style="background: var(--orange-dim);">🦠</div>
+        <h3>ClamAV Antivirus Gateway</h3>
+        <p>A file upload endpoint that streams files through ClamAV for malware scanning. Infected uploads are rejected and the sender's IP can be auto-banned at the kernel level.</p>
+        <div class="service-detail">
+          <span class="hl-purple">Endpoint:</span> POST /upload<br/>
+          <span class="hl-purple">Max Size:</span> 20 MB<br/>
+          <span class="hl-purple">Concurrency:</span> 4 scan slots<br/>
+          <span class="hl-purple">Auto-Ban:</span> BAN_ON_INFECTED=1
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- LIVE METRICS -->
+<section id="metrics" class="metrics-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-purple">Cloud Observability</span>
+      <h2>Real-Time Monitoring on Cloud</h2>
+      <p>Prometheus scrapes metrics from the Go exporter every 5 seconds. Grafana auto-provisions a dashboard on first boot.</p>
+    </div>
+
+    <div class="metrics-grid fade-in">
+      <div class="metric-card">
+        <div class="metric-label">Packets Passed</div>
+        <div class="metric-value green-val" id="m-passed">0</div>
+        <div class="metric-sub">XDP_PASS decisions</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Packets Dropped</div>
+        <div class="metric-value" style="color: var(--red);" id="m-dropped">0</div>
+        <div class="metric-sub">XDP_DROP decisions</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Rate Limited</div>
+        <div class="metric-value" style="color: var(--orange);" id="m-rate">0</div>
+        <div class="metric-sub">Flood protection drops</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Threat Signatures</div>
+        <div class="metric-value" style="color: var(--purple);" id="m-threats">0</div>
+        <div class="metric-sub">Active blocklist IPs</div>
+      </div>
+    </div>
+
+    <div class="dashboard-mock fade-in">
+      <div class="dashboard-mock-header">
+        <h4>📊 Grafana — eBPF Shield Dashboard</h4>
+        <span class="grafana-badge">Live on :3000</span>
+      </div>
+      <div class="chart-area" id="chart-area"></div>
+      <div class="chart-legend">
+        <span><span class="dot dot-green"></span> Packets Passed</span>
+        <span><span class="dot dot-red"></span> Packets Dropped</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SECURITY FEATURES -->
+<section id="security" class="security-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-red">Security Layers</span>
+      <h2>Multi-Layer Defense in the Cloud</h2>
+      <p>Five independent security mechanisms working together at kernel speed.</p>
+    </div>
+
+    <div class="security-grid fade-in">
+      <div class="sec-card">
+        <div class="sec-icon">🚫</div>
+        <h4>IP Blocklist</h4>
+        <p>20,000-entry kernel hash map fed by live threat intelligence — blocks known malicious IPs instantly at the NIC.</p>
+      </div>
+      <div class="sec-card">
+        <div class="sec-icon">⚡</div>
+        <h4>Rate Limiter</h4>
+        <p>Per-IP sliding window counter — drops packets exceeding 20,000 pps, protecting against DDoS and port scans.</p>
+      </div>
+      <div class="sec-card">
+        <div class="sec-icon">🧩</div>
+        <h4>Fragment Blocking</h4>
+        <p>Zero-trust policy on fragmented packets — tracks and drops IP fragments used for evasion attacks.</p>
+      </div>
+      <div class="sec-card">
+        <div class="sec-icon">🔍</div>
+        <h4>Deep Packet Inspection</h4>
+        <p>Inspects TCP/UDP payload for known attack signatures ("PWND") directly in the kernel data path.</p>
+      </div>
+      <div class="sec-card">
+        <div class="sec-icon">🦠</div>
+        <h4>ClamAV Antivirus</h4>
+        <p>Uploaded files are scanned through ClamAV in real-time — infected files are quarantined and uploaders can be auto-banned.</p>
+      </div>
+      <div class="sec-card">
+        <div class="sec-icon">🔐</div>
+        <h4>Azure NSG + eBPF</h4>
+        <p>Dual-layer firewall — Azure NSG controls cloud-level access while eBPF/XDP handles L3/L4/L7 inspection at kernel level.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TECH STACK -->
+<section id="stack" class="stack-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-orange">Technology</span>
+      <h2>Tech Stack</h2>
+    </div>
+    <div class="stack-grid fade-in">
+      <div class="stack-item"><div class="stack-icon">☁️</div><div class="stack-name">Microsoft Azure</div><div class="stack-role">Cloud Platform</div></div>
+      <div class="stack-item"><div class="stack-icon">🐧</div><div class="stack-name">Ubuntu 22.04</div><div class="stack-role">VM Operating System</div></div>
+      <div class="stack-item"><div class="stack-icon">🐝</div><div class="stack-name">eBPF / XDP</div><div class="stack-role">Kernel Data Plane</div></div>
+      <div class="stack-item"><div class="stack-icon">🔧</div><div class="stack-name">C (Clang)</div><div class="stack-role">Kernel Program</div></div>
+      <div class="stack-item"><div class="stack-icon">🐹</div><div class="stack-name">Go (cilium/ebpf)</div><div class="stack-role">Control Plane</div></div>
+      <div class="stack-item"><div class="stack-icon">🐳</div><div class="stack-name">Docker Compose</div><div class="stack-role">Container Orchestration</div></div>
+      <div class="stack-item"><div class="stack-icon">📈</div><div class="stack-name">Prometheus</div><div class="stack-role">Metrics Collection</div></div>
+      <div class="stack-item"><div class="stack-icon">📊</div><div class="stack-name">Grafana</div><div class="stack-role">Dashboard & Viz</div></div>
+      <div class="stack-item"><div class="stack-icon">🦠</div><div class="stack-name">ClamAV</div><div class="stack-role">Antivirus Engine</div></div>
+      <div class="stack-item"><div class="stack-icon">⚙️</div><div class="stack-name">systemd</div><div class="stack-role">Service Management</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- TERMINAL LOG -->
+<section class="terminal-section">
+  <div class="container">
+    <div class="section-header fade-in">
+      <span class="section-tag tag-green">Live Deployment</span>
+      <h2>Deployment Output</h2>
+      <p>What happens when you run the automated deployment script.</p>
+    </div>
+
+    <div class="terminal fade-in">
+      <div class="terminal-bar">
+        <div class="terminal-dot r"></div>
+        <div class="terminal-dot y"></div>
+        <div class="terminal-dot g"></div>
+        <span class="terminal-title">azureuser@ebpf-shield-node:~/ebpf-firewall</span>
+      </div>
+      <div class="terminal-body" id="terminal-body">
+        <div class="dim">$ sudo bash scripts/vm-setup.sh</div>
+        <div><span class="info">== packages ==</span></div>
+        <div>Installing clang llvm gcc libbpf-dev docker.io clamav-daemon...</div>
+        <div><span class="success">✓</span> 14 packages installed</div>
+        <div></div>
+        <div><span class="info">== clamav ==</span></div>
+        <div>Updating ClamAV signature database...</div>
+        <div><span class="success">✓</span> clamd socket active at /var/run/clamav/clamd.ctl</div>
+        <div></div>
+        <div><span class="info">== secrets ==</span></div>
+        <div>Generating UPLOAD_TOKEN... <span class="success">✓</span></div>
+        <div>Writing /etc/ebpf-shield.env... <span class="success">✓</span></div>
+        <div>Generating GRAFANA_PASSWORD... <span class="success">✓</span></div>
+        <div></div>
+        <div><span class="info">== build ==</span></div>
+        <div><span class="cmd">clang -O2 -g -Wall -target bpf -c kernel/xdp_telemetry.c -o kernel/xdp_telemetry.o</span></div>
+        <div><span class="success">✓</span> eBPF bytecode compiled</div>
+        <div><span class="cmd">go build -o shield .</span></div>
+        <div><span class="success">✓</span> Go binary built</div>
+        <div></div>
+        <div><span class="info">== systemd service ==</span></div>
+        <div>Created ebpf-shield.service</div>
+        <div><span class="cmd">systemctl enable ebpf-shield</span></div>
+        <div><span class="success">✓</span> Service enabled and started</div>
+        <div></div>
+        <div><span class="info">== prometheus + grafana ==</span></div>
+        <div><span class="cmd">docker compose up -d</span></div>
+        <div>Container prometheus <span class="success">Started</span></div>
+        <div>Container grafana   <span class="success">Started</span></div>
+        <div></div>
+        <div><span class="info">== status ==</span></div>
+        <div><span class="success">● ebpf-shield.service — active (running)</span></div>
+        <div><span class="success">● clamav-daemon.service — active (running)</span></div>
+        <div><span class="success">● docker.service — active (running)</span></div>
+        <div></div>
+        <div>[SYSTEM] <span class="success">eBPF Firewall actively deployed on interface: eth0</span></div>
+        <div>[INTELLIGENCE] Fetching live threat feed from IPsum...</div>
+        <div>[INTELLIGENCE] <span class="success">Injected 12,847 threat signatures into the kernel.</span></div>
+        <div>[SCANNER] <span class="warn">Upload gateway listening on :8000/upload</span></div>
+        <div>[TELEMETRY] <span class="info">Prometheus exporter listening on :8080/metrics</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>Built by <span class="footer-name">Aakash G S</span> · ASE '24 · eBPF Cloud Firewall Project</p>
+  <p style="margin-top: 6px; font-size: 0.72rem;">Kernel-level security at the speed of the cloud ⚡</p>
+</footer>
+
+<script>
+  // ===== SCROLL ANIMATIONS =====
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+  // ===== ANIMATED METRICS COUNTERS =====
+  function animateCounter(id, target, duration = 2000) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const start = performance.now();
+    const format = (n) => n.toLocaleString();
+    function tick(now) {
+      const progress = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      el.textContent = format(Math.floor(target * eased));
+      if (progress < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // Trigger counter animation when metrics section is visible
+  const metricsObs = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        animateCounter('m-passed', 2847523, 2500);
+        animateCounter('m-dropped', 184291, 2200);
+        animateCounter('m-rate', 12847, 1800);
+        animateCounter('m-threats', 14203, 2000);
+        metricsObs.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.3 });
+  const mg = document.querySelector('.metrics-grid');
+  if (mg) metricsObs.observe(mg);
+
+  // ===== ANIMATED CHART =====
+  const chartArea = document.getElementById('chart-area');
+  if (chartArea) {
+    const barCount = 60;
+    for (let i = 0; i < barCount; i++) {
+      const passed = document.createElement('div');
+      passed.className = 'chart-bar passed';
+      passed.style.height = '0px';
+      chartArea.appendChild(passed);
+    }
+    // Add some dropped bars interspersed
+    const dropped = [];
+    for (let i = 0; i < 15; i++) {
+      const idx = Math.floor(Math.random() * barCount);
+      dropped.push(idx);
+    }
+
+    const chartObs = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const bars = chartArea.querySelectorAll('.chart-bar');
+          bars.forEach((bar, i) => {
+            setTimeout(() => {
+              if (dropped.includes(i)) {
+                bar.classList.remove('passed');
+                bar.classList.add('dropped');
+                bar.style.height = (15 + Math.random() * 40) + 'px';
+              } else {
+                bar.style.height = (40 + Math.random() * 130) + 'px';
+              }
+            }, i * 20);
+          });
+          chartObs.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.3 });
+    chartObs.observe(chartArea);
+  }
+</script>
+
+</body>
+</html>
