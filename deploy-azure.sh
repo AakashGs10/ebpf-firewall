@@ -22,8 +22,22 @@ echo "=============================================="
 # ---- PHASE 1: AZURE AUTHENTICATION ----
 echo ""
 echo "[PHASE 1] Authenticating with Azure..."
-az login --use-device-code
+# Use simple az login; if it prompts for a browser, follow it.
+az login >/dev/null
 echo "[PHASE 1] Authentication successful."
+
+# ---- PHASE 1.5: CLEANUP PREVIOUS DEPLOYMENT ----
+echo ""
+echo "[PHASE 1.5] Checking for previous deployments..."
+EXISTS=$(az group exists --name "$RESOURCE_GROUP" --output tsv || echo "false")
+if [ "$EXISTS" = "true" ]; then
+  echo "Found existing resource group '$RESOURCE_GROUP'. Deleting it now..."
+  echo "This might take a few minutes. Please wait..."
+  az group delete --name "$RESOURCE_GROUP" --yes
+  echo "Cleanup complete."
+else
+  echo "No previous deployment found."
+fi
 
 # ---- PHASE 2: RESOURCE GROUP ----
 echo ""
@@ -46,117 +60,44 @@ VM_OUTPUT=$(az vm create \
   --output json)
 
 # Extract the public IP
-PUBLIC_IP=$(echo "$VM_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['publicIpAddress'])")
+PUBLIC_IP=$(echo "$VM_OUTPUT" | grep -oP '"publicIpAddress":\s*"\K[^"]+')
 echo "[PHASE 3] VM provisioned. Public IP: $PUBLIC_IP"
 
 # ---- PHASE 4: OPEN NETWORK SECURITY GROUP PORTS ----
 echo ""
 echo "[PHASE 4] Configuring Azure NSG firewall rules..."
 
-# Port 8080: Go metrics exporter (Prometheus scrape target)
-az vm open-port \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VM_NAME" \
-  --port 8080 \
-  --priority 100 \
-  --output table
+# Port 8080: Prometheus metrics exporter
+az vm open-port --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --port 8080 --priority 100 --output none
+# Port 3000: Grafana dashboard
+az vm open-port --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --port 3000 --priority 110 --output none
+# Port 9090: Prometheus web UI
+az vm open-port --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --port 9090 --priority 120 --output none
+# Port 8000: ClamAV upload gateway
+az vm open-port --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" --port 8000 --priority 130 --output none
 
-# Port 3000: Grafana dashboard (web UI)
-az vm open-port \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VM_NAME" \
-  --port 3000 \
-  --priority 110 \
-  --output table
+echo "[PHASE 4] NSG ports 8080, 3000, 9090, 8000 opened."
 
-# Port 9090: Prometheus web UI (optional, for debugging)
-az vm open-port \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$VM_NAME" \
-  --port 9090 \
-  --priority 120 \
-  --output table
-
-echo "[PHASE 4] NSG ports 8080, 3000, 9090 opened."
-
-# ---- PHASE 5: BOOTSTRAP THE CLOUD NODE ----
+# ---- PHASE 5: CLONE & DEPLOY ----
 echo ""
-echo "[PHASE 5] Bootstrapping kernel dependencies on Azure VM..."
+echo "[PHASE 5] Cloning repository and running vm-setup.sh on Azure VM..."
+echo "Waiting 30 seconds for VM SSH to become fully active..."
+sleep 30
 
-ssh -o StrictHostKeyChecking=no "$ADMIN_USER@$PUBLIC_IP" << 'REMOTE_SCRIPT'
-set -e
-
-echo "[REMOTE] Updating package index..."
-sudo apt-get update -y
-
-echo "[REMOTE] Installing eBPF toolchain (clang, llvm, libbpf)..."
-sudo apt-get install -y clang llvm gcc make libbpf-dev linux-headers-$(uname -r)
-
-echo "[REMOTE] Installing Go..."
-sudo snap install go --classic
-
-echo "[REMOTE] Installing Docker..."
-sudo apt-get install -y docker.io docker-compose-v2
-sudo systemctl enable docker
-sudo systemctl start docker
-sudo usermod -aG docker $USER
-
-echo "[REMOTE] Bootstrap complete."
-REMOTE_SCRIPT
-
-echo "[PHASE 5] Cloud node bootstrapped."
-
-# ---- PHASE 6: DEPLOY THE CODEBASE ----
-echo ""
-echo "[PHASE 6] Cloning eBPF project to Azure VM..."
-
-ssh "$ADMIN_USER@$PUBLIC_IP" << REMOTE_DEPLOY
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$ADMIN_USER@$PUBLIC_IP" << REMOTE_DEPLOY
 set -e
 
 echo "[REMOTE] Cloning repository..."
 git clone $REPO_URL ~/ebpf-firewall || (cd ~/ebpf-firewall && git pull)
 
-echo "[REMOTE] Compiling eBPF kernel program natively..."
+echo "[REMOTE] Running automated setup (packages, build, systemd, observability)..."
 cd ~/ebpf-firewall
-clang -O2 -g -Wall -target bpf -c kernel/xdp_telemetry.c -o kernel/xdp_telemetry.o
+sudo bash scripts/vm-setup.sh
 
-echo "[REMOTE] Downloading Go dependencies..."
-go mod tidy
-
-echo "[REMOTE] Code deployment complete."
+echo "[REMOTE] Deployment complete."
 REMOTE_DEPLOY
 
-echo "[PHASE 6] Codebase deployed and compiled on cloud node."
-
-# ---- PHASE 7: LAUNCH TELEMETRY STACK ----
-echo ""
-echo "[PHASE 7] Starting Prometheus + Grafana via Docker Compose..."
-
-ssh "$ADMIN_USER@$PUBLIC_IP" << 'REMOTE_TELEMETRY'
-set -e
-
-cd ~/ebpf-firewall
-sudo docker compose up -d
-
-echo "[REMOTE] Telemetry stack active."
-REMOTE_TELEMETRY
-
-echo "[PHASE 7] Prometheus + Grafana running on cloud node."
-
-# ---- PHASE 8: ACTIVATE THE SHIELD ----
-echo ""
-echo "[PHASE 8] Deploying eBPF shield on Azure network interface..."
-
-ssh "$ADMIN_USER@$PUBLIC_IP" << 'REMOTE_SHIELD'
-set -e
-
-cd ~/ebpf-firewall
-sudo nohup go run main.go > /var/log/ebpf-firewall.log 2>&1 &
-
-echo "[REMOTE] eBPF Firewall deployed and logging to /var/log/ebpf-firewall.log"
-REMOTE_SHIELD
-
-echo "[PHASE 8] Shield active on cloud node."
+echo "[PHASE 5] Full stack deployed via vm-setup.sh."
 
 # ---- DEPLOYMENT COMPLETE ----
 echo ""
@@ -170,11 +111,13 @@ echo " Access Points:"
 echo "   Grafana Dashboard:  http://$PUBLIC_IP:3000"
 echo "   Prometheus:         http://$PUBLIC_IP:9090"
 echo "   Raw Metrics:        http://$PUBLIC_IP:8080/metrics"
+echo "   Upload Gateway:     http://$PUBLIC_IP:8000/upload"
+echo "   Health Check:       http://$PUBLIC_IP:8080/healthz"
 echo ""
 echo " SSH Access:"
-echo "   ssh $ADMIN_USER@$PUBLIC_IP"
+echo "   ssh -o StrictHostKeyChecking=no $ADMIN_USER@$PUBLIC_IP"
 echo ""
 echo " Firewall Logs:"
-echo "   ssh $ADMIN_USER@$PUBLIC_IP 'tail -f /var/log/ebpf-firewall.log'"
+echo "   ssh -o StrictHostKeyChecking=no $ADMIN_USER@$PUBLIC_IP 'sudo journalctl -u ebpf-shield -f'"
 echo ""
 echo "=============================================="
